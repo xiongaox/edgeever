@@ -54,6 +54,8 @@ Log into your [Cloudflare Dashboard](https://dash.cloudflare.com/):
 
 > `EDGE_EVER_AUTH_USERNAME` is prefilled with `admin`. Most users can keep this value. Advanced users can replace it with a custom administrator username; the configured username is required at login.
 
+> `EDGE_EVER_AUTH_PASSWORD` is a Worker runtime Secret, not a Workers Builds variable. The standard deploy command reuses and verifies this Secret; do not duplicate the password in build variables.
+
 ---
 
 ### Step 4: Set Build Commands & Start Build
@@ -68,6 +70,8 @@ Deploy command: bun run deploy:cloudflare-builds
 Click **Save and Deploy** to trigger the initial build.
 
 The deploy command automatically looks up the D1 UUID by the `edgeever` database name. Do not edit `wrangler.toml` or manually copy the D1 ID. The Workers Builds API token must have D1 read/edit permission.
+
+After publishing, the CI deployment records the actual public target reported by Wrangler and requests its `/api/health` endpoint. The build fails if the live Worker is missing its `DB` binding, uses an unprepared D1 database, or does not return a healthy response.
 
 ---
 

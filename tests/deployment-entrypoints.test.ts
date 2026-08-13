@@ -48,7 +48,9 @@ describe("Cloudflare deployment entrypoints", () => {
     expect(scripts["deploy:ci"]).toBe(
       "bun run db:migrate:remote && bun run deploy:worker && bun run deploy:verify",
     );
-    expect(scripts["deploy:cloudflare-builds"]).toBe("bun run deploy:ci");
+    expect(scripts["deploy:cloudflare-builds"]).toBe(
+      "EDGE_EVER_USE_EXISTING_AUTH_SECRET=true bun run deploy:ci",
+    );
   });
 
   test("online deployment declares the required authentication Secret", () => {
@@ -57,6 +59,11 @@ describe("Cloudflare deployment entrypoints", () => {
 
     const packageJson = JSON.parse(readRepositoryFile("package.json"));
     expect(packageJson.cloudflare.bindings.EDGE_EVER_AUTH_PASSWORD.description).toBeTruthy();
+
+    const englishGuide = readRepositoryFile("docs/deploy-cloudflare-button.md");
+    const chineseGuide = readRepositoryFile("docs/deploy-cloudflare-button.zh-CN.md");
+    expect(englishGuide).toContain("Worker runtime Secret, not a Workers Builds variable");
+    expect(chineseGuide).toContain("Worker 运行时 Secret，不是 Workers Builds 构建变量");
   });
 
   test("online deployment resolves the D1 id without editing the repository config", () => {
@@ -171,6 +178,71 @@ describe("Cloudflare deployment entrypoints", () => {
       expect(result.stdout).toBe(`${queryOutput}\n`);
       expect(result.stderr).toContain("[info] resolving Cloudflare D1 database id for edgeever");
       expect(result.stderr).toContain("[ok] resolved D1 database edgeever");
+    } finally {
+      rmSync(workingDirectory, { force: true, recursive: true });
+    }
+  });
+
+  test("records the public Worker target reported by a CI deployment", () => {
+    const workingDirectory = mkdtempSync(resolve(tmpdir(), "edgeever-deployment-target-"));
+    const wranglerBinDirectory = resolve(
+      workingDirectory,
+      "node_modules",
+      "wrangler",
+      "bin",
+    );
+    const inheritedEnvironment = Object.fromEntries(
+      ["PATH", "Path", "PATHEXT", "SystemRoot", "ComSpec", "TEMP", "TMP"]
+        .map((name) => [name, process.env[name]])
+        .filter((entry): entry is [string, string] => Boolean(entry[1])),
+    );
+
+    try {
+      mkdirSync(wranglerBinDirectory, { recursive: true });
+      writeFileSync(
+        resolve(workingDirectory, "wrangler.toml"),
+        [
+          'name = "edgeever"',
+          "workers_dev = true",
+          'database_name = "edgeever"',
+          'database_id = "11111111-1111-1111-1111-111111111111"',
+          'bucket_name = "edgeever-resources"',
+          'preview_bucket_name = "edgeever-resources-preview"',
+          'migrations_dir = "migrations"',
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        resolve(wranglerBinDirectory, "wrangler.js"),
+        [
+          'if (process.argv.includes("deploy")) {',
+          '  process.stdout.write("Uploaded edgeever\\nDeployed edgeever triggers (0.4 sec)\\n  https://edgeever.example.workers.dev\\nCurrent Version ID: version-1\\n");',
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [resolve(repositoryRoot, "scripts", "run-wrangler.mjs"), "deploy"],
+        {
+          cwd: workingDirectory,
+          encoding: "utf8",
+          env: {
+            ...inheritedEnvironment,
+            CI: "true",
+            EDGE_EVER_AUTH_PASSWORD: "test-password",
+            EDGE_EVER_INSTANCE: "",
+            WRANGLER_CONFIG: resolve(workingDirectory, "wrangler.toml"),
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(readFileSync(
+        resolve(workingDirectory, ".wrangler.deployment-targets.json"),
+        "utf8",
+      ))).toEqual({ urls: ["https://edgeever.example.workers.dev"] });
     } finally {
       rmSync(workingDirectory, { force: true, recursive: true });
     }

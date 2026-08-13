@@ -54,6 +54,8 @@
 
 > `EDGE_EVER_AUTH_USERNAME` 默认预填为 `admin`。普通用户可以直接使用这个值；如果希望使用其他管理员用户名，可在这里修改。请记住部署时填写的用户名，登录时需要同时输入用户名和密码。
 
+> `EDGE_EVER_AUTH_PASSWORD` 是 Worker 运行时 Secret，不是 Workers Builds 构建变量。标准部署命令会复用并验证这个 Secret；无需、也不应把密码重复填写到构建变量中。
+
 ---
 
 ### 步骤 4：设置构建命令并启动构建
@@ -68,6 +70,8 @@ Deploy command: bun run deploy:cloudflare-builds
 点击 **Save and Deploy** 启动首次构建部署。
 
 部署命令会根据 `edgeever` 数据库名称自动查询 D1 UUID。无需修改 `wrangler.toml`，也无需手工复制 D1 ID。Workers Builds API Token 必须具有 D1 读取和编辑权限。
+
+发布完成后，CI 部署会记录 Wrangler 返回的实际公网入口，并请求该入口的 `/api/health`。如果线上 Worker 缺少 `DB` binding、绑定了未初始化的 D1，或没有返回健康状态，构建会直接失败。
 
 ---
 
