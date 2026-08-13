@@ -76,6 +76,7 @@ import {
 } from "@/components/ui/dialog";
 import { EditorToolbar } from "./EditorToolbar";
 import { EditorOutline } from "./EditorOutline";
+import { useAiBubbleMenu } from "./editor/useAiBubbleMenu";
 import { WeChatIcon } from "./WeChatIcon";
 import { ThemeToggle } from "./ThemeToggle";
 import { useTheme } from "./ThemeProvider";
@@ -140,6 +141,7 @@ import {
   getStoredEditorLinkOpenMode,
   resolveEditorLinkRequireModifier,
   shouldOpenEditorLink,
+  shouldShowEditorLinkOpenHint,
   type EditorLinkOpenMode,
 } from "@/lib/editor-link-click";
 import {
@@ -703,6 +705,7 @@ const RichEditorPane = ({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
+  const aiBubbleMenu = useAiBubbleMenu(aiAssistantOpen);
   const [aiSelection, setAiSelection] = useState<AiSelectionContext | null>(null);
   const [systemInfoOpen, setSystemInfoOpen] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -1403,8 +1406,7 @@ const RichEditorPane = ({
   }, [cancelResourceMenuHide, isMobileViewport, showResourceMenu]);
 
   const showEditorLinkOpenHint = useCallback((target: EventTarget | null) => {
-    // Tip only when desktop + "require modifier" preference is on (default click-to-open needs no tip).
-    if (!editor?.isEditable || isMobileViewport || editorLinkOpenMode !== "modifier") {
+    if (!shouldShowEditorLinkOpenHint(Boolean(editor?.isEditable), isMobileViewport, editorLinkOpenMode)) {
       return;
     }
 
@@ -1459,12 +1461,6 @@ const RichEditorPane = ({
       setNoteLinkHintPosition(null);
     }
   }, []);
-
-  useEffect(() => {
-    if (editorLinkOpenMode !== "modifier") {
-      setNoteLinkHintPosition(null);
-    }
-  }, [editorLinkOpenMode]);
 
   useEffect(() => {
     if (!noteLinkHintPosition) {
@@ -4133,10 +4129,8 @@ const RichEditorPane = ({
               >
                 <BubbleMenu
                   editor={editor}
-                  shouldShow={({ editor: activeEditor }) =>
-                    activeEditor.isEditable && !activeEditor.state.selection.empty && !aiAssistantOpen
-                  }
-                  options={{ placement: "top" }}
+                  shouldShow={aiBubbleMenu.shouldShow}
+                  options={aiBubbleMenu.options}
                 >
                   <Button
                     type="button"

@@ -73,6 +73,9 @@ export const enUS = {
     desktopInstanceContinue: "Continue",
     desktopChangeInstance: "Change instance URL",
     desktopInstanceUrlInvalid: "Enter a valid instance URL beginning with http:// or https://.",
+    instanceUrlPlaceholder: "https://demo.edgeever.org",
+    instanceUrlHint: "Enter the full HTTPS URL, not just “demo”.",
+    usePublicDemo: "Use public demo instance",
   },
   nav: {
     mobileMain: "Mobile primary navigation",
@@ -180,7 +183,7 @@ export const enUS = {
     imageCompressionDescription: "Compress large images locally before upload to reduce storage use.",
     imageCompressionAria: "Compress note images",
     linkOpenModifierTitle: "Open links with Ctrl/⌘ + click while editing",
-    linkOpenModifierDescription: "When on, hold Ctrl/⌘ and click to open; off (default) opens on a single click. Desktop only.",
+    linkOpenModifierDescription: "On by default: hold Ctrl/⌘ and click to open links, preventing accidental opens while editing. Turn off to use a single click. Desktop only.",
     linkOpenModifierAria: "Require Ctrl or ⌘ click to open links while editing",
     syncIntervalTitle: "Automatic sync interval",
     syncIntervalDescription: "Sync edits to the server automatically while keeping local drafts available immediately.",
@@ -1035,7 +1038,7 @@ export const enUS = {
     empty: "No notes found",
     loading: "Searching notes...",
     close: "Close note picker",
-    openHint: "Hold {{modifier}} and click to open the link",
+    openHint: "Hold {{modifier}} and click to open the link. To open links with a single click, turn this option off in Profile → General",
   },
   mobileNotebookPicker: {
     title: "Switch notebook",
