@@ -76,10 +76,11 @@ import {
 } from "@/components/ui/dialog";
 import { EditorToolbar } from "./EditorToolbar";
 import { EditorOutline } from "./EditorOutline";
+import { EditorTagPicker } from "./EditorTagPicker";
 import { useAiBubbleMenu } from "./editor/useAiBubbleMenu";
 import { WeChatIcon } from "./WeChatIcon";
 import { ThemeToggle } from "./ThemeToggle";
-import { useTheme } from "./ThemeProvider";
+import { useEditorTheme } from "./ThemeProvider";
 import { sanitizeAndScopeCss } from "@/lib/css-sandbox";
 import { RevisionHistoryDialog } from "./dialogs/RevisionHistoryDialog";
 import { ExternalLinkDialog } from "./dialogs/ExternalLinkDialog";
@@ -91,7 +92,6 @@ import { cn, formatDateTime, parseTagsText } from "@/lib/utils";
 import { EDITOR_CONTENT_MAX_WIDTH, EDITOR_CONTENT_MAX_WIDTH_COLLAPSED } from "@/lib/workspace-ui";
 import {
   countMemoCharacters,
-  createEdgeEverMathematics,
   docToMarkdown,
   MEMO_CONTENT_STYLE,
   markdownToDoc,
@@ -106,6 +106,7 @@ import {
   parseMemoLinkHref,
 } from "@edgeever/shared";
 import { DEFAULT_IMAGE_WIDTH_PERCENT } from "@edgeever/shared/image-display";
+import { createEdgeEverMathematics } from "@edgeever/shared/mathematics";
 import { codeBlockLowlight, EdgeEverCodeBlock } from "@/lib/code-block";
 import { compressImageForUpload } from "@/lib/image-compression";
 import { localDb, type MemoUpdateSyncPayload } from "@/lib/local-db";
@@ -680,7 +681,7 @@ const RichEditorPane = ({
   onRequestMobileNativeEdit,
 }: RichEditorPaneProps) => {
   const { t, i18n } = useTranslation();
-  const { customEditorTheme, editorTheme, resolvedTheme } = useTheme();
+  const { customEditorTheme, editorTheme } = useEditorTheme();
   const queryClient = useQueryClient();
   const isSelectionMode = Boolean(selectionActionBar);
   const [title, setTitle] = useState("");
@@ -3821,20 +3822,16 @@ const RichEditorPane = ({
                 </SelectContent>
               </Select>
             </div>
-            <label className="flex h-8 min-w-[12rem] flex-1 items-center gap-2 rounded-md border border-transparent px-2 text-sm text-slate-500 transition focus-within:border-slate-200 focus-within:bg-slate-50 focus-within:ring-2 focus-within:ring-emerald-500/15">
-              <Tags className="h-4 w-4" />
-              <input
-                value={tagsText}
-                readOnly={effectiveReadOnly}
-                onChange={(event) => {
-                  setTagsText(event.target.value);
-                  persistCurrentDraft(title, event.target.value, getMobilePlainTextValue());
-                  markDirty();
-                }}
-                className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-slate-400"
-                placeholder={t("editor.tagPlaceholder")}
-              />
-            </label>
+            <EditorTagPicker
+              disabled={effectiveReadOnly}
+              loadTags={() => repository.listTags()}
+              value={tagsText}
+              onChange={(nextTagsText) => {
+                setTagsText(nextTagsText);
+                persistCurrentDraft(title, nextTagsText, getMobilePlainTextValue());
+                markDirty();
+              }}
+            />
           </div>
         </div>
         {noteSearchOpen && (
@@ -3993,7 +3990,6 @@ const RichEditorPane = ({
           "--editor-body-font-size": `${MEMO_CONTENT_STYLE.body.fontSize}px`,
           "--editor-body-line-height": String(MEMO_CONTENT_STYLE.body.lineHeight / MEMO_CONTENT_STYLE.body.fontSize),
           "--editor-paragraph-spacing": `${MEMO_CONTENT_STYLE.body.paragraphSpacing}px`,
-          "--memo-content-divider-color": MEMO_CONTENT_STYLE.divider.color[resolvedTheme],
           "--memo-content-divider-spacing": `${MEMO_CONTENT_STYLE.divider.marginVertical}px`,
           ...(editorTheme !== "default" &&
           editorTheme !== "minimal-emerald" &&
@@ -4001,13 +3997,20 @@ const RichEditorPane = ({
           editorTheme !== "wechat-green" &&
           editorTheme !== "modern-mint"
             ? {
-                "--editor-theme-bg": (resolvedTheme === "dark" ? customEditorTheme.dark : customEditorTheme.light).background,
-                "--editor-theme-text": (resolvedTheme === "dark" ? customEditorTheme.dark : customEditorTheme.light).text,
-                "--editor-theme-muted": (resolvedTheme === "dark" ? customEditorTheme.dark : customEditorTheme.light).muted,
-                "--editor-theme-heading": (resolvedTheme === "dark" ? customEditorTheme.dark : customEditorTheme.light).heading,
-                "--editor-theme-accent": (resolvedTheme === "dark" ? customEditorTheme.dark : customEditorTheme.light).accent,
-                "--editor-theme-soft": (resolvedTheme === "dark" ? customEditorTheme.dark : customEditorTheme.light).soft,
-                "--editor-theme-border": (resolvedTheme === "dark" ? customEditorTheme.dark : customEditorTheme.light).border,
+                "--editor-theme-light-bg": customEditorTheme.light.background,
+                "--editor-theme-light-text": customEditorTheme.light.text,
+                "--editor-theme-light-muted": customEditorTheme.light.muted,
+                "--editor-theme-light-heading": customEditorTheme.light.heading,
+                "--editor-theme-light-accent": customEditorTheme.light.accent,
+                "--editor-theme-light-soft": customEditorTheme.light.soft,
+                "--editor-theme-light-border": customEditorTheme.light.border,
+                "--editor-theme-dark-bg": customEditorTheme.dark.background,
+                "--editor-theme-dark-text": customEditorTheme.dark.text,
+                "--editor-theme-dark-muted": customEditorTheme.dark.muted,
+                "--editor-theme-dark-heading": customEditorTheme.dark.heading,
+                "--editor-theme-dark-accent": customEditorTheme.dark.accent,
+                "--editor-theme-dark-soft": customEditorTheme.dark.soft,
+                "--editor-theme-dark-border": customEditorTheme.dark.border,
               }
             : {}),
         } as CSSProperties}

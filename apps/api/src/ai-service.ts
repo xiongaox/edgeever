@@ -1,6 +1,3 @@
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogle } from "@ai-sdk/google";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type {
   AiAction,
   AiDiscoveredModel,
@@ -12,7 +9,6 @@ import type {
   AiTone,
 } from "@edgeever/shared";
 import { getDefaultAiPromptSeed } from "@edgeever/shared";
-import { generateText, streamText } from "ai";
 import { AppError } from "./app-error";
 import { decryptSecret } from "./secret-encryption";
 import type { DatabaseAdapter } from "./storage-contract";
@@ -183,26 +179,19 @@ export const getAiSettings = async (
 
 export const normalizeAiBaseUrl = (value: string) => value.trim().replace(/\/+$/, "");
 
-export const createAiModel = (config: {
+const loadAiRuntime = () => import("./ai-runtime");
+
+export const createAiModel = async (config: {
   provider: AiProvider;
   baseUrl: string;
   apiKey: string;
   modelId: string;
 }) => {
-  const baseURL = normalizeAiBaseUrl(config.baseUrl);
-  switch (config.provider) {
-    case "anthropic":
-      return createAnthropic({ baseURL, apiKey: config.apiKey })(config.modelId);
-    case "google":
-      return createGoogle({ baseURL, apiKey: config.apiKey })(config.modelId);
-    default:
-      return createOpenAICompatible({
-        name: "edgeever-openai-compatible",
-        baseURL,
-        apiKey: config.apiKey,
-        includeUsage: true,
-      })(config.modelId);
-  }
+  const runtime = await loadAiRuntime();
+  return runtime.createAiModel({
+    ...config,
+    baseUrl: normalizeAiBaseUrl(config.baseUrl),
+  });
 };
 
 export const loadDefaultAiModel = async (
@@ -319,13 +308,19 @@ export const testAiModel = async (config: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
-}) => generateText({
-  model: createAiModel(config),
-  system: "You are responding to an API connectivity check. Follow the user instruction exactly.",
-  prompt: "Reply with only: OK",
-  maxOutputTokens: 16,
-  abortSignal: AbortSignal.timeout(20_000),
-});
+}) => {
+  const runtime = await loadAiRuntime();
+  return runtime.generateAiText({
+    model: runtime.createAiModel({
+      ...config,
+      baseUrl: normalizeAiBaseUrl(config.baseUrl),
+    }),
+    system: "You are responding to an API connectivity check. Follow the user instruction exactly.",
+    prompt: "Reply with only: OK",
+    maxOutputTokens: 16,
+    abortSignal: AbortSignal.timeout(20_000),
+  });
+};
 
 /**
  * Fallback instructions from the shared seed catalog (same text shown in the prompt library).
@@ -391,6 +386,85 @@ export const normalizeAiGenerationText = (
   return fencedMarkdown ? fencedMarkdown[1].trim() : result;
 };
 
+/** Incrementally remove the result boundary while preserving a safe full-response fallback. */
+export const createAiGenerationStreamNormalizer = (resultBoundary: AiGenerationResultBoundary) => {
+  let pending = "";
+  let boundaryStarted = false;
+  let boundaryFinished = false;
+  let openingLineRemoved = false;
+  let wrapperResolved = false;
+  let fencedMarkdown = false;
+
+  const removeOpeningLine = () => {
+    if (openingLineRemoved) return true;
+    const openingLine = /^[ \t]*(?:\r\n|\r|\n)/.exec(pending);
+    if (openingLine) {
+      pending = pending.slice(openingLine[0].length);
+      openingLineRemoved = true;
+      return true;
+    }
+    if (/^[ \t]*\r?$/.test(pending)) return false;
+    openingLineRemoved = true;
+    return true;
+  };
+
+  const resolveMarkdownWrapper = (finishing = false) => {
+    if (wrapperResolved) return true;
+    const wrapper = /^```(?:markdown|md)[ \t]*(?:\r\n|\r|\n)/i.exec(pending);
+    if (wrapper) {
+      pending = pending.slice(wrapper[0].length);
+      fencedMarkdown = true;
+      wrapperResolved = true;
+      return true;
+    }
+    if (!finishing && !/(?:\r\n|\r|\n)/.test(pending)) return false;
+    wrapperResolved = true;
+    return true;
+  };
+
+  const stripClosingWrapper = (value: string) => fencedMarkdown
+    ? value.replace(/(?:\r\n|\r|\n)```[ \t]*(?:\r\n|\r|\n)?$/, "")
+    : value;
+
+  return {
+    push(value: string) {
+      if (boundaryFinished || !value) return "";
+      pending += value;
+
+      if (!boundaryStarted) {
+        const startIndex = pending.indexOf(resultBoundary.start);
+        if (startIndex < 0) return "";
+        pending = pending.slice(startIndex + resultBoundary.start.length);
+        boundaryStarted = true;
+      }
+
+      if (!removeOpeningLine()) return "";
+      if (!resolveMarkdownWrapper()) return "";
+      const endIndex = pending.indexOf(resultBoundary.end);
+      if (endIndex >= 0) {
+        const output = stripClosingWrapper(pending.slice(0, endIndex))
+          .replace(/[ \t]*(?:\r\n|\r|\n)?$/, "");
+        pending = "";
+        boundaryFinished = true;
+        return output;
+      }
+
+      const retainedLength = resultBoundary.end.length;
+      if (pending.length <= retainedLength) return "";
+      const output = pending.slice(0, -retainedLength);
+      pending = pending.slice(-retainedLength);
+      return output;
+    },
+    finish() {
+      if (boundaryFinished) return "";
+      if (!boundaryStarted) return normalizeAiGenerationText(pending, resultBoundary);
+      removeOpeningLine();
+      resolveMarkdownWrapper(true);
+      return stripClosingWrapper(pending.replaceAll(resultBoundary.end, "")).trimEnd();
+    },
+  };
+};
+
 export const resolveAiGenerationSystemInstruction = (input: {
   action: AiAction;
   tone?: AiTone;
@@ -430,8 +504,8 @@ export const buildAiGenerationPrompt = (input: {
   `Note content:\n${input.contentMarkdown}`,
 ].filter(Boolean).join("\n\n");
 
-export const streamAiGeneration = (input: {
-  model: ReturnType<typeof createAiModel>;
+type AiGenerationRequest = {
+  model: Awaited<ReturnType<typeof createAiModel>>;
   action: AiAction;
   title: string;
   contentMarkdown: string;
@@ -440,7 +514,9 @@ export const streamAiGeneration = (input: {
   instruction?: string;
   resultBoundary: AiGenerationResultBoundary;
   abortSignal?: AbortSignal;
-}) => streamText({
+};
+
+const buildAiGenerationRequest = (input: AiGenerationRequest) => ({
   model: input.model,
   system: resolveAiGenerationSystemInstruction(input),
   prompt: buildAiGenerationPrompt({
@@ -452,3 +528,13 @@ export const streamAiGeneration = (input: {
   maxOutputTokens: 4096,
   abortSignal: input.abortSignal,
 });
+
+export const generateAiGeneration = async (input: AiGenerationRequest) => {
+  const runtime = await loadAiRuntime();
+  return runtime.generateAiText(buildAiGenerationRequest(input));
+};
+
+export const streamAiGeneration = async (input: AiGenerationRequest) => {
+  const runtime = await loadAiRuntime();
+  return runtime.streamAiText(buildAiGenerationRequest(input));
+};
