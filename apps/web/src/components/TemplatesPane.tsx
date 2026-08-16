@@ -2,6 +2,7 @@ import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
   Check,
   ChevronLeft,
+  Copy,
   Eye,
   LayoutList,
   Pencil,
@@ -20,6 +21,8 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { WORKSPACE_PAGE_TITLE_CLASSNAME } from "@/lib/workspace-ui";
+import { copyTextToClipboard } from "@/lib/clipboard";
+import { ClipboardCopyNotice } from "@/components/ClipboardCopyNotice";
 import type { MemoTemplate as SavedMemoTemplate } from "@edgeever/shared";
 
 const TemplateIconAction = ({
@@ -86,6 +89,16 @@ export const TemplatesPane = ({
   } | null>(null);
 
   const [deleteConfirmTemplate, setDeleteConfirmTemplate] = useState<SavedMemoTemplate | null>(null);
+  const [templateIdCopyNotice, setTemplateIdCopyNotice] = useState<{
+    id: string;
+    status: "copied" | "error";
+  } | null>(null);
+
+  const copyTemplateId = async (template: SavedMemoTemplate) => {
+    const copied = await copyTextToClipboard(template.id);
+    setTemplateIdCopyNotice({ id: template.id, status: copied ? "copied" : "error" });
+    window.setTimeout(() => setTemplateIdCopyNotice(null), copied ? 2200 : 3000);
+  };
 
   const startEditing = (template: SavedMemoTemplate) => {
     setCreatingTemplate(false);
@@ -356,6 +369,16 @@ export const TemplatesPane = ({
                       <div className="flex items-center gap-1 text-slate-400">
                         <TemplateIconAction
                           className="p-1 hover:text-slate-700 transition rounded-md hover:bg-slate-100"
+                          label={t("templates.copyId")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void copyTemplateId(template);
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </TemplateIconAction>
+                        <TemplateIconAction
+                          className="p-1 hover:text-slate-700 transition rounded-md hover:bg-slate-100"
                           disabled={isCreating}
                           label={t("templates.edit")}
                           onClick={(e) => {
@@ -518,6 +541,15 @@ export const TemplatesPane = ({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+      )}
+
+      {templateIdCopyNotice && (
+        <ClipboardCopyNotice status={templateIdCopyNotice.status}>
+          {t(
+            templateIdCopyNotice.status === "copied" ? "templates.idCopied" : "templates.idCopyFailed",
+            { id: templateIdCopyNotice.id },
+          )}
+        </ClipboardCopyNotice>
       )}
       </div>
     </TooltipProvider>
