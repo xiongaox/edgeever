@@ -51,6 +51,12 @@ struct MemoEditView: View {
     @State private var showEmptyAiSelectionAlert = false
     @State private var aiUndoToken: UUID?
     @State private var didImportSharedImages = false
+    @State private var isSuggestingTags = false
+    @State private var smartTagsAdded = false
+    @State private var showSmartTagAlert = false
+    @State private var smartTagAlertTitle = ""
+    @State private var smartTagAlertMessage = ""
+    @State private var smartTagTask: Task<Void, Never>?
 
     private var title: String { get { viewModel.title } nonmutating set { viewModel.title = newValue } }
     private var tagsText: String { get { viewModel.tagsText } nonmutating set { viewModel.tagsText = newValue } }
@@ -147,7 +153,9 @@ struct MemoEditView: View {
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showTagPicker) {
-            MemoTagPickerSheet(selectedTags: viewModel.tags) { tags in
+            MemoTagPickerSheet(
+                selectedTags: viewModel.tags
+            ) { tags in
                 tagsText = tags.joined(separator: ", ")
                 markDirtyAndScheduleSave()
             }
@@ -193,6 +201,11 @@ struct MemoEditView: View {
                 "在正文中选中一段文字，然后再点 AI。",
                 en: "Select some text in the note body, then tap AI again."
             ))
+        }
+        .alert(smartTagAlertTitle, isPresented: $showSmartTagAlert) {
+            Button(env.preferences.t("好的", en: "OK"), role: .cancel) {}
+        } message: {
+            Text(smartTagAlertMessage)
         }
         .alert(
             env.preferences.t("应用模板？", en: "Apply template?"),
@@ -287,6 +300,8 @@ struct MemoEditView: View {
             await importInitialSharedImagesIfNeeded()
         }
         .onDisappear {
+            smartTagTask?.cancel()
+            smartTagTask = nil
             viewModel.cancelScheduledSave()
             // Create commit is owned by Back / Done (Android `requestClose` = createMutation).
             // Only flush edit sessions, or create-after-image-materialize if still dirty and
@@ -448,7 +463,10 @@ struct MemoEditView: View {
                 .accessibilityIdentifier(CreateMemoChrome.notebook)
 
                 Button {
-                    showTagPicker = true
+                    Task {
+                        await pullEditorSnapshotIfPossible()
+                        showTagPicker = true
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "tag")
@@ -468,6 +486,35 @@ struct MemoEditView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(env.preferences.t("笔记标签", en: "Tags"))
                 .accessibilityIdentifier(CreateMemoChrome.tags)
+
+                Button {
+                    generateAndApplySmartTags()
+                } label: {
+                    Group {
+                        if isSuggestingTags {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(AppTheme.accentStrong)
+                        } else {
+                            Image(systemName: smartTagsAdded ? "checkmark" : "sparkles")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(AppTheme.accentStrong)
+                        }
+                    }
+                    .frame(width: 34, height: 34)
+                    .background(smartTagsAdded ? AppTheme.accentSoft : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isSuggestingTags || busyChrome || viewModel.tags.count >= 24
+                    || (title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && contentMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                .opacity((busyChrome || viewModel.tags.count >= 24) ? 0.45 : 1)
+                .accessibilityLabel(env.preferences.t(
+                    isSuggestingTags ? "正在生成智能标签" : smartTagsAdded ? "智能标签已添加" : "智能标签",
+                    en: isSuggestingTags ? "Generating smart tags" : smartTagsAdded ? "Smart tags added" : "Smart tags"
+                ))
+                .accessibilityIdentifier(CreateMemoChrome.smartTags)
 
             }
             .frame(minHeight: 40)
@@ -693,6 +740,70 @@ struct MemoEditView: View {
         viewModel.markDirty()
         guard !suppressPersistence, !isUploading else { return }
         scheduleSave()
+    }
+
+    private func generateAndApplySmartTags() {
+        guard !isSuggestingTags, !busyChrome, viewModel.tags.count < 24 else { return }
+        smartTagTask?.cancel()
+        isSuggestingTags = true
+        smartTagsAdded = false
+        smartTagTask = Task { @MainActor in
+            await pullEditorSnapshotIfPossible()
+            let currentTags = viewModel.tags
+            let input = AiTagSuggestionsInput(
+                title: title,
+                contentMarkdown: contentMarkdown,
+                currentTags: currentTags,
+                locale: env.preferences.isEnglish ? "en-US" : "zh-CN"
+            )
+            do {
+                let response = try await env.session.client.suggestAiTags(input)
+                try Task.checkCancellation()
+                let availableSlots = max(0, 24 - currentTags.count)
+                let additions = Array(response.suggestions
+                    .map(\.name)
+                    .filter { name in
+                        !currentTags.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+                    }
+                    .prefix(availableSlots))
+                guard !additions.isEmpty else {
+                    isSuggestingTags = false
+                    smartTagAlertTitle = env.preferences.t("智能标签", en: "Smart tags")
+                    smartTagAlertMessage = env.preferences.t(
+                        "没有找到适合这篇笔记的新标签。",
+                        en: "No useful new tags were found for this note."
+                    )
+                    showSmartTagAlert = true
+                    smartTagTask = nil
+                    return
+                }
+                tagsText = (currentTags + additions).joined(separator: ", ")
+                markDirtyAndScheduleSave()
+                isSuggestingTags = false
+                smartTagsAdded = true
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled else { return }
+                smartTagsAdded = false
+                smartTagTask = nil
+            } catch is CancellationError {
+                isSuggestingTags = false
+            } catch let apiError as APIError where apiError.code == "ai_not_configured" {
+                isSuggestingTags = false
+                smartTagAlertTitle = env.preferences.t("智能标签生成失败", en: "Couldn't generate smart tags")
+                smartTagAlertMessage = env.preferences.t(
+                    "请先在“AI 集成”中配置默认模型。",
+                    en: "Configure a model in AI Integrations first."
+                )
+                showSmartTagAlert = true
+                smartTagTask = nil
+            } catch {
+                isSuggestingTags = false
+                smartTagAlertTitle = env.preferences.t("智能标签生成失败", en: "Couldn't generate smart tags")
+                smartTagAlertMessage = error.localizedDescription
+                showSmartTagAlert = true
+                smartTagTask = nil
+            }
+        }
     }
 
     private func requestApplyTemplate(_ seed: CreateMemoSeed) {
@@ -1208,7 +1319,10 @@ private struct MemoTagPickerSheet: View {
     @State private var error: String?
     let onChange: ([String]) -> Void
 
-    init(selectedTags: [String], onChange: @escaping ([String]) -> Void) {
+    init(
+        selectedTags: [String],
+        onChange: @escaping ([String]) -> Void
+    ) {
         _selection = State(initialValue: selectedTags)
         self.onChange = onChange
     }
@@ -1309,7 +1423,7 @@ private struct MemoTagPickerSheet: View {
             .navigationTitle(env.preferences.t("选择标签", en: "Choose tags"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(env.preferences.t("完成", en: "Done")) { dismiss() }
                 }
             }
@@ -1346,6 +1460,7 @@ private struct MemoTagPickerSheet: View {
         query = ""
         onChange(selection)
     }
+
 }
 
 
